@@ -15,14 +15,12 @@ GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 
 # 2. Gemini AI 설정
 genai.configure(api_key=GEMINI_KEY)
-# 모델명을 가장 안정적인 버전으로 변경
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
+# 가장 호환성이 높은 기본 모델명으로 변경
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 def get_articles():
     url = "http://www.gamelook.com.cn/"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-    }
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
         res = requests.get(url, headers=headers, timeout=30)
         res.encoding = 'utf-8'
@@ -50,63 +48,36 @@ def get_articles():
         unique_articles = {a['url']: a for a in articles}.values()
         return list(unique_articles)
     except Exception as e:
-        print(f"목록 수집 에러: {e}")
         return []
 
 def summarize_with_gemini(art):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'http://www.gamelook.com.cn/'
-    }
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         res = requests.get(art['url'], headers=headers, timeout=20)
         res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        content = ""
-        content_tag = soup.find(['div', 'article', 'section'], class_=['entry-content', 'post-content', 'entry', 'content'])
-        if not content_tag:
-            content_tag = soup.find('article')
-        
-        if content_tag:
-            for s in content_tag(['script', 'style', 'aside']):
-                s.decompose()
-            content = content_tag.get_text(separator='\n', strip=True)
-        
-        if len(content) < 200:
-            content = soup.get_text(separator='\n', strip=True)
+        # 본문 추출
+        content_tag = soup.find(['div', 'article'], class_=['entry-content', 'post-content'])
+        content = content_tag.get_text(strip=True) if content_tag else soup.get_text(strip=True)
+        content = content[:3000]
 
-        if len(content) < 100:
-            return "본문 추출 실패", "기사 본문 내용이 너무 적어 요약할 수 없습니다."
-
-        prompt = f"""
-        중국어 게임 기사입니다. 아래 내용을 분석해서 한국어로 출력하세요.
-        1. [한글제목]: 기사 제목을 한국어로 자연스럽게 번역해서 작성
-        2. [요약]: 기사의 핵심 내용을 한국어 불렛포인트 3줄로 요약
-
-        기사 제목: {art['title']}
-        기사 본문: {content[:3500]}
-        """
+        # 모델 호출 (프롬프트 단순화하여 성공률 제고)
+        prompt = f"Translate the title to Korean and summarize the content in 3 bullet points in Korean.\nTitle: {art['title']}\nContent: {content}"
         
         response = model.generate_content(prompt)
         text = response.text.strip()
         
-        kr_title = "제목 번역 실패"
-        summary_lines = []
+        # 간단한 파싱: 첫 줄은 제목, 나머지는 요약으로 간주
+        lines = [l for l in text.split('\n') if l.strip()]
+        kr_title = lines[0] if lines else "번역 실패"
+        summary = "<br>".join(lines[1:]) if len(lines) > 1 else "요약 실패"
         
-        for line in text.split('\n'):
-            if '[한글제목]' in line:
-                kr_title = line.replace('[한글제목]', '').replace(':', '').strip()
-            if line.strip().startswith('-') or line.strip().startswith('•') or (len(line) > 15 and '[' not in line):
-                if len(summary_lines) < 3:
-                    summary_lines.append(line.strip())
-        
-        summary_final = "<br>".join(summary_lines) if summary_lines else "요약 생성에 실패했습니다."
-        return kr_title, summary_final
+        return kr_title, summary
 
     except Exception as e:
-        print(f"상세 에러 ({art['url']}): {e}")
-        return "번역 오류", f"에러 발생: {str(e)}"
+        # 에러 메시지를 메일에 직접 찍어서 확인
+        return "번역 오류", f"에러 원인: {str(e)[:100]}"
 
 # 실행부
 news_list = get_articles()
@@ -116,22 +87,19 @@ if news_list:
     <html>
     <head>
         <style>
-            body {{ font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; line-height: 1.6; color: #333; }}
-            .article-box {{ margin-bottom: 30px; padding: 20px; border-left: 6px solid #0056b3; background-color: #fcfcfc; border-bottom: 1px solid #eee; }}
-            .title-kr {{ font-size: 1.25em; font-weight: bold; color: #0056b3; margin-bottom: 8px; }}
-            .title-cn {{ font-family: 'Microsoft YaHei', sans-serif; color: #777; font-size: 0.9em; margin-bottom: 15px; }}
-            .summary {{ background: #ffffff; padding: 12px; border: 1px solid #eef; border-radius: 8px; font-size: 1em; color: #444; }}
-            .link-btn {{ display: inline-block; margin-top: 10px; color: #0056b3; font-weight: bold; text-decoration: none; }}
+            body {{ font-family: 'Malgun Gothic', sans-serif; line-height: 1.6; color: #333; }}
+            .article-box {{ margin-bottom: 25px; padding: 15px; border-left: 5px solid #0056b3; background-color: #f9f9f9; }}
+            .title-kr {{ font-size: 1.15em; font-weight: bold; color: #0056b3; }}
+            .title-cn {{ color: #777; font-size: 0.85em; margin-bottom: 10px; }}
+            .summary {{ padding: 10px; background: white; border-radius: 5px; }}
         </style>
     </head>
     <body>
-        <h2 style="color: #222;">📅 Gamelook 주요 뉴스 브리핑 ({datetime.now().strftime('%Y-%m-%d')})</h2>
-        <p style="color: #666;">어제자 기사 총 {len(news_list)}건에 대한 AI 자동 요약 보고서입니다.</p>
-        <hr style="border: 0; border-top: 2px solid #eee;">
+        <h2>📅 Gamelook 주요 뉴스 ({datetime.now().strftime('%Y-%m-%d')})</h2>
     """
 
     for i, art in enumerate(news_list, 1):
-        print(f"처리 중... ({i}/{len(news_list)})")
+        print(f"처리 중: {i}/{len(news_list)}")
         kr_title, summary = summarize_with_gemini(art)
         
         html_content += f"""
@@ -139,23 +107,22 @@ if news_list:
             <div class="title-kr">[{i}] {kr_title}</div>
             <div class="title-cn">원문: {art['title']}</div>
             <div class="summary">{summary}</div>
-            <a href="{art['url']}" class="link-btn">▶ 원문 바로가기</a>
+            <a href="{art['url']}">[원문 바로가기]</a>
         </div>
         """
-        time.sleep(2)
+        time.sleep(1)
 
-    html_content += """</body></html>"""
+    html_content += "</body></html>"
 
-    # 메일 발송 로직 - 오타 수정 완료
     msg = EmailMessage()
-    msg['Subject'] = f"[Gamelook] {datetime.now().strftime('%m/%d')} 게임 뉴스 요약 리포트"
+    msg['Subject'] = f"[Gamelook] {datetime.now().strftime('%m/%d')} 뉴스 브리핑"
     msg['From'] = EMAIL_USER
     msg['To'] = RECEIVER
-    msg.add_alternative(html_content, subtype='html') # add_ -> add_alternative로 수정
+    msg.add_alternative(html_content, subtype='html')
 
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
         smtp.login(EMAIL_USER, EMAIL_PASS)
         smtp.send_message(msg)
-    print("메일 발송 완료!")
+    print("성공")
 else:
-    print("수집된 기사가 없습니다.")
+    print("기사 없음")
