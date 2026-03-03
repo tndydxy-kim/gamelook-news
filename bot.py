@@ -19,87 +19,135 @@ model = genai.GenerativeModel('gemini-1.5-flash')
 def get_articles():
     url = "http://www.gamelook.com.cn/"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    res = requests.get(url, headers=headers)
-    res.encoding = 'utf-8'
-    soup = BeautifulSoup(res.text, 'html.parser')
-    
-    # 찾고자 하는 어제 날짜 형식들
-    target_dates = [
-        (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d'), # 2026-03-02
-        (datetime.now() - timedelta(days=1)).strftime('%m-%d'),    # 03-02
-        "1天前" # 중국어로 '1일 전'
-    ]
-    print(f"찾고 있는 날짜 키워드: {target_dates}")
-
-    articles = []
-
-    # 모든 기사 아이템(div)을 대상으로 루프
-    # Gamelook의 다양한 기사 박스 구조를 모두 포함
-    items = soup.find_all(['div', 'article', 'li'])
-
-    for item in items:
-        item_text = item.get_text()
-        # 해당 박스 안에 어제 날짜가 포함되어 있는지 확인
-        if any(dt in item_text for dt in target_dates):
-            link_tag = item.find('a', href=True)
-            if link_tag:
-                title = link_tag.get_text(strip=True)
-                url = link_tag['href']
-                # 제목이 너무 짧거나 중복, 이미 추가된 URL은 제외
-                if len(title) > 10 and url.startswith('http'):
-                    articles.append({'title': title, 'url': url})
-
-    # 중복 제거
-    unique_articles = {a['url']: a for a in articles}.values()
-    return list(unique_articles)
-
-def summarize(art):
     try:
-        res = requests.get(art['url'], timeout=10)
+        res = requests.get(url, headers=headers, timeout=20)
         res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
-        content = soup.get_text(strip=True)[:2500]
         
-        prompt = f"이 기사를 한국어로 3줄 요약해줘.\n제목: {art['title']}\n내용: {content}"
+        target_dates = [
+            (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d'),
+            (datetime.now() - timedelta(days=1)).strftime('%m-%d'),
+            "1天前"
+        ]
+        
+        articles = []
+        items = soup.find_all(['div', 'article', 'li'])
+
+        for item in items:
+            item_text = item.get_text()
+            if any(dt in item_text for dt in target_dates):
+                link_tag = item.find('a', href=True)
+                if link_tag:
+                    title = link_tag.get_text(strip=True)
+                    url = link_tag['href']
+                    if len(title) > 10 and url.startswith('http'):
+                        articles.append({'title': title, 'url': url})
+
+        unique_articles = {a['url']: a for a in articles}.values()
+        return list(unique_articles)
+    except Exception as e:
+        print(f"기사 목록 가져오기 에러: {e}")
+        return []
+
+def summarize_with_gemini(art):
+    try:
+        res = requests.get(art['url'], timeout=15)
+        res.encoding = 'utf-8'
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        # 본문 텍스트 추출 최적화
+        content_tag = soup.select_one('.entry-content, .post-content, article')
+        content = content_tag.get_text(strip=True)[:3000] if content_tag else soup.get_text(strip=True)[:3000]
+        
+        # [요청사항 반영] 제목 번역 및 3줄 요약 명령
+        prompt = f"""
+        중국 게임 기사를 분석해서 다음 형식으로 출력해줘.
+        1. 번역된 한국어 제목
+        2. 핵심 내용 한국어로 3줄 요약
+
+        기사 제목: {art['title']}
+        기사 본문: {content}
+        """
+        
         response = model.generate_content(prompt)
-        return response.text
-    except:
-        return "요약 실패"
+        result = response.text.strip().split('\n')
+        
+        # 첫 줄은 한국어 제목, 나머지는 요약으로 분리 시도
+        translated_title = result[0].replace("번역된 한국어 제목:", "").strip()
+        summary_text = "<br>".join(result[1:])
+        
+        return translated_title, summary_text
+    except Exception as e:
+        print(f"요약 에러 ({art['url']}): {e}")
+        return "제목 번역 실패", "본문 요약에 실패했습니다. 원문을 참조해 주세요."
 
 # 실행
 news_list = get_articles()
 
 if news_list:
-    print(f"성공! {len(news_list)}개의 기사를 찾았습니다.")
-    report = f"📅 Gamelook 어제자 기사 요약 ({datetime.now().strftime('%Y-%m-%d')})\n\n"
+    # HTML 메일 본문 작성 (폰트 설정 포함)
+    html_content = f"""
+    <html>
+    <head>
+        <style>
+            body {{ 
+                font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; 
+                line-height: 1.6; 
+                color: #333;
+            }}
+            .article-box {{ 
+                margin-bottom: 30px; 
+                padding: 15px; 
+                border-left: 5px solid #0056b3; 
+                background-color: #f9f9f9;
+            }}
+            .title-cn {{ 
+                font-family: 'Microsoft YaHei', sans-serif; 
+                color: #666; 
+                font-size: 0.9em;
+            }}
+            .title-kr {{ 
+                font-size: 1.2em; 
+                font-weight: bold; 
+                color: #0056b3; 
+                margin-bottom: 5px;
+            }}
+            .summary {{ margin: 10px 0; }}
+            .link-btn {{ color: #0056b3; text-decoration: underline; }}
+        </style>
+    </head>
+    <body>
+        <h2>📅 Gamelook 뉴스 요약 보고서 ({datetime.now().strftime('%Y-%m-%d')})</h2>
+        <p>전날 수집된 기사 총 {len(news_list)}건에 대한 요약입니다.</p>
+        <hr>
+    """
+
     for i, art in enumerate(news_list, 1):
-        print(f"요약 중... ({i}/{len(news_list)})")
-        summary = summarize(art)
-        report += f"[{i}] {art['title']}\n🔗 원문: {art['url']}\n{summary}\n\n" + "-"*30 + "\n\n"
-    
+        print(f"처리 중... ({i}/{len(news_list)})")
+        kr_title, summary = summarize_with_gemini(art)
+        
+        html_content += f"""
+        <div class="article-box">
+            <div class="title-kr">[{i}] {kr_title}</div>
+            <div class="title-cn">원문 제목: {art['title']}</div>
+            <div class="summary">{summary}</div>
+            <a href="{art['url']}" class="link-btn">[원문 바로가기]</a>
+        </div>
+        """
+
+    html_content += "</body></html>"
+
+    # 메일 발송 설정 (HTML 형식)
     msg = EmailMessage()
-    msg.set_content(report)
-    msg['Subject'] = f"[Gamelook] {datetime.now().strftime('%m/%d')} 뉴스 요약 보고서"
+    msg['Subject'] = f"[Gamelook] {datetime.now().strftime('%m/%d')} 주요 뉴스 요약 보고서"
     msg['From'] = EMAIL_USER
     msg['To'] = RECEIVER
-    
+    msg.set_content("이 메일은 HTML 형식을 지원합니다. HTML 뷰어로 확인해 주세요.") # 기본 텍스트
+    msg.add_alternative(html_content, subtype='html') # HTML 추가
+
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
         smtp.login(EMAIL_USER, EMAIL_PASS)
         smtp.send_message(msg)
     print("메일 발송 완료!")
 else:
-    # 기사를 못 찾았을 때, 설정 문제인지 확인하기 위해 '강제'로 아무 기사나 하나 보냄
-    print("기사를 못 찾아서 테스트 모드로 전환합니다.")
-    test_art = {'title': '사이트 연결 테스트 기사', 'url': 'http://www.gamelook.com.cn/'}
-    summary = "기사를 자동으로 찾지 못했습니다. 사이트 구조를 확인해야 합니다."
-    report = f"기사 수집 실패 알림\n\n원문: {test_art['url']}\n{summary}"
-    
-    msg = EmailMessage()
-    msg.set_content(report)
-    msg['Subject'] = "[Gamelook] 수집 실패 확인 메일"
-    msg['From'] = EMAIL_USER
-    msg['To'] = RECEIVER
-    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-        smtp.login(EMAIL_USER, EMAIL_PASS)
-        smtp.send_message(msg)
-    print("수집 실패 알림 메일을 보냈습니다.")
+    print("수집된 기사가 없습니다.")
