@@ -15,15 +15,13 @@ GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 
 # 2. Gemini AI 설정
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+# 모델명을 가장 안정적인 버전으로 변경
+model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 def get_articles():
     url = "http://www.gamelook.com.cn/"
-    # 브라우저처럼 보이기 위한 헤더 강화
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'ko-KR,ko;q=0.8,en-US;q=0.5,en;q=0.3',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     }
     try:
         res = requests.get(url, headers=headers, timeout=30)
@@ -61,25 +59,20 @@ def summarize_with_gemini(art):
         'Referer': 'http://www.gamelook.com.cn/'
     }
     try:
-        # 기사 본문 가져오기 시도
         res = requests.get(art['url'], headers=headers, timeout=20)
         res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # [수정] 본문 추출을 위해 가장 가능성 높은 태그들을 순서대로 시도
         content = ""
-        # 1순위: 특정 클래스, 2순위: article 태그, 3순위: id가 content인 것
         content_tag = soup.find(['div', 'article', 'section'], class_=['entry-content', 'post-content', 'entry', 'content'])
         if not content_tag:
             content_tag = soup.find('article')
         
         if content_tag:
-            # 광고나 불필요한 태그 제거
             for s in content_tag(['script', 'style', 'aside']):
                 s.decompose()
             content = content_tag.get_text(separator='\n', strip=True)
         
-        # 위 시도가 모두 실패하면 페이지 전체 텍스트에서 추출
         if len(content) < 200:
             content = soup.get_text(separator='\n', strip=True)
 
@@ -104,18 +97,18 @@ def summarize_with_gemini(art):
         for line in text.split('\n'):
             if '[한글제목]' in line:
                 kr_title = line.replace('[한글제목]', '').replace(':', '').strip()
-            if line.strip().startswith('-') or line.strip().startswith('•') or '[요약]' not in line and len(line) > 10:
-                if len(summary_lines) < 3 and not line.startswith('['):
+            if line.strip().startswith('-') or line.strip().startswith('•') or (len(line) > 15 and '[' not in line):
+                if len(summary_lines) < 3:
                     summary_lines.append(line.strip())
         
-        summary_text = "<br>".join(summary_lines) if summary_lines else "요약 생성에 실패했습니다."
-        return kr_title, summary_text
+        summary_final = "<br>".join(summary_lines) if summary_lines else "요약 생성에 실패했습니다."
+        return kr_title, summary_final
 
     except Exception as e:
         print(f"상세 에러 ({art['url']}): {e}")
         return "번역 오류", f"에러 발생: {str(e)}"
 
-# 실행 및 메일 발송 로직은 이전과 동일 (안정성을 위해 재구성)
+# 실행부
 news_list = get_articles()
 
 if news_list:
@@ -149,17 +142,20 @@ if news_list:
             <a href="{art['url']}" class="link-btn">▶ 원문 바로가기</a>
         </div>
         """
-        time.sleep(2) # Gemini 및 서버 부하 방지용 (2초로 상향)
+        time.sleep(2)
 
-    html_content += """
-        <p style="font-size: 0.8em; color: #999; text-align: center; margin-top: 40px;">
-            본 메일은 AI에 의해 자동 생성되었습니다.
-        </p>
-    </body></html>
-    """
+    html_content += """</body></html>"""
 
+    # 메일 발송 로직 - 오타 수정 완료
     msg = EmailMessage()
     msg['Subject'] = f"[Gamelook] {datetime.now().strftime('%m/%d')} 게임 뉴스 요약 리포트"
     msg['From'] = EMAIL_USER
     msg['To'] = RECEIVER
-    msg.add_
+    msg.add_alternative(html_content, subtype='html') # add_ -> add_alternative로 수정
+
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+        smtp.login(EMAIL_USER, EMAIL_PASS)
+        smtp.send_message(msg)
+    print("메일 발송 완료!")
+else:
+    print("수집된 기사가 없습니다.")
