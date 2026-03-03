@@ -1,0 +1,24 @@
+name: Gamelook Daily News
+on:
+  schedule:
+    - cron: '0 23 * * *' # 한국 시간 기준 매일 오전 8시
+  workflow_dispatch: # 수동 실행 버튼
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4 google-generativeai
+      - name: Run Script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+        run: python bot.py
