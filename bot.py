@@ -13,10 +13,9 @@ EMAIL_PASS = os.environ["EMAIL_PASSWORD"]
 RECEIVER = os.environ["RECEIVER_EMAIL"]
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 
-# 2. Gemini AI 설정
+# 2. Gemini AI 설정 (구형 라이브러리에서도 호환되는 모델명 사용)
 genai.configure(api_key=GEMINI_KEY)
-# 가장 호환성이 높은 기본 모델명으로 변경
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-pro')
 
 def get_articles():
     url = "http://www.gamelook.com.cn/"
@@ -47,7 +46,7 @@ def get_articles():
 
         unique_articles = {a['url']: a for a in articles}.values()
         return list(unique_articles)
-    except Exception as e:
+    except:
         return []
 
 def summarize_with_gemini(art):
@@ -57,27 +56,22 @@ def summarize_with_gemini(art):
         res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 본문 추출
         content_tag = soup.find(['div', 'article'], class_=['entry-content', 'post-content'])
         content = content_tag.get_text(strip=True) if content_tag else soup.get_text(strip=True)
-        content = content[:3000]
+        content = content[:2500]
 
-        # 모델 호출 (프롬프트 단순화하여 성공률 제고)
-        prompt = f"Translate the title to Korean and summarize the content in 3 bullet points in Korean.\nTitle: {art['title']}\nContent: {content}"
+        prompt = f"Translate the following game news title to Korean and summarize the content in 3 bullet points in Korean.\nTitle: {art['title']}\nContent: {content}"
         
         response = model.generate_content(prompt)
         text = response.text.strip()
         
-        # 간단한 파싱: 첫 줄은 제목, 나머지는 요약으로 간주
         lines = [l for l in text.split('\n') if l.strip()]
-        kr_title = lines[0] if lines else "번역 실패"
-        summary = "<br>".join(lines[1:]) if len(lines) > 1 else "요약 실패"
+        kr_title = lines[0].replace('**', '').strip()
+        summary = "<br>".join(lines[1:])
         
         return kr_title, summary
-
     except Exception as e:
-        # 에러 메시지를 메일에 직접 찍어서 확인
-        return "번역 오류", f"에러 원인: {str(e)[:100]}"
+        return "요약 생성 중", f"내용 요약 중 잠시 오류가 발생했습니다. (원문을 참고해 주세요)"
 
 # 실행부
 news_list = get_articles()
@@ -107,10 +101,10 @@ if news_list:
             <div class="title-kr">[{i}] {kr_title}</div>
             <div class="title-cn">원문: {art['title']}</div>
             <div class="summary">{summary}</div>
-            <a href="{art['url']}">[원문 바로가기]</a>
+            <p><a href="{art['url']}">[원문 바로가기]</a></p>
         </div>
         """
-        time.sleep(1)
+        time.sleep(2)
 
     html_content += "</body></html>"
 
