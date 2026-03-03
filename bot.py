@@ -3,34 +3,13 @@ import smtplib
 from email.message import EmailMessage
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import datetime
+import time
 
 # 1. 설정값 불러오기
 EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASS = os.environ["EMAIL_PASSWORD"]
 RECEIVER = os.environ["RECEIVER_EMAIL"]
-
-def is_target_time(date_str):
-    """3월 3일 00:00 ~ 3월 4일 08:00 사이의 기사인지 판별"""
-    try:
-        # 다양한 날짜 형식 대응 (2026-03-03, 03-03 14:00, 1시간 전 등)
-        now = datetime.now()
-        target_start = datetime(2026, 3, 3, 0, 0)
-        target_end = datetime(2026, 3, 4, 8, 0)
-        
-        # '1시간 전', '5분 전' 등 상대 시간 처리
-        if '小时' in date_str or '分钟' in date_str or '刚刚' in date_str:
-            return True
-        
-        # 숫자만 추출하여 날짜 판별 (03-03, 03-04 등)
-        date_match = re.search(r'(\d{1,2})[-/](\d{1,2})', date_str)
-        if date_match:
-            month, day = map(int, date_match.groups())
-            if (month == 3 and day == 3) or (month == 3 and day == 4):
-                return True
-    except:
-        pass
-    return False
 
 def fetch_articles():
     all_articles = []
@@ -38,78 +17,96 @@ def fetch_articles():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     }
 
+    # 수집 대상 사이트 및 각 사이트별 뉴스 리스트 CSS 선택자
     sites = [
-        {"name": "Gamelook", "url": "http://www.gamelook.com.cn/", "color": "#0056b3"},
-        {"name": "游戏陀螺", "url": "https://www.youxituoluo.com/", "color": "#e67e22"},
-        {"name": "17173", "url": "https://news.17173.com/game/", "color": "#27ae60"}
+        {
+            "name": "Gamelook", 
+            "url": "http://www.gamelook.com.cn/", 
+            "color": "#0056b3",
+            "selector": ".entry-title a, .post-title a"
+        },
+        {
+            "name": "游戏陀螺", 
+            "url": "https://www.youxituoluo.com/", 
+            "color": "#e67e22",
+            "selector": ".news-item h2 a, .post-list-item h2 a, .tit a"
+        },
+        {
+            "name": "17173", 
+            "url": "https://news.17173.com/game/", 
+            "color": "#27ae60",
+            "selector": ".news-list li .tit a, .news-list li h3 a, .hot-news a"
+        }
     ]
 
     for site in sites:
         try:
             print(f"{site['name']} 수집 중...")
             res = requests.get(site['url'], headers=headers, timeout=25)
+            # 17173은 GBK 인코딩이 많으므로 자동 감지 적용
             res.encoding = res.apparent_encoding if site['name'] == "17173" else 'utf-8'
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # 사이트별 기사 영역 지정
-            if site['name'] == "17173":
-                # 17173은 news-list 내부의 li를 직접 탐색
-                items = soup.select('.news-list li')
-            elif site['name'] == "游戏陀螺":
-                # 游戏陀螺는 메인 피드의 기사 박스 탐색
-                items = soup.select('.news-item, .post-list-item')
-            else:
-                items = soup.find_all(['div', 'li', 'article'])
+            # 지정된 셀렉터로 기사 링크 추출
+            items = soup.select(site['selector'])
+            found_count = 0
 
-            for item in items:
-                link_tag = item.find('a', href=True)
-                if not link_tag: continue
+            for a in items:
+                title = a.get_text(strip=True)
+                url = a.get('href', '')
                 
-                title = link_tag.get_text(strip=True)
-                url = link_tag['href']
-                
-                # 날짜 텍스트 추출 (태그 내부 혹은 속성값)
-                date_text = item.get_text() 
-                if site['name'] == "17173":
-                    # 17173은 data-time 속성에 날짜가 있는 경우가 많음
-                    date_text += str(item.get('data-time', ''))
+                # 유효성 검사 (메뉴 링크 방지를 위해 제목 15자 이상만 수집)
+                if len(title) < 15 or not url or "javascript" in url:
+                    continue
 
-                # 필터링: 제목 길이 + 날짜 조건(3/3~3/4 08:00)
-                if len(title) > 15 and is_target_time(date_text):
-                    if not url.startswith('http'):
-                        url = requests.compat.urljoin(site['url'], url)
+                if not url.startswith('http'):
+                    url = requests.compat.urljoin(site['url'], url)
+                
+                # 중복 제거
+                if not any(x['url'] == url for x in all_articles):
+                    all_articles.append({
+                        "site": site['name'],
+                        "title": title,
+                        "url": url,
+                        "color": site['color']
+                    })
+                    found_count += 1
+                
+                # 각 사이트별 상위 20개까지만 수집 (최신 뉴스 위주)
+                if found_count >= 20:
+                    break
                     
-                    if not any(x['url'] == url for x in all_articles):
-                        all_articles.append({
-                            "site": site['name'],
-                            "title": title,
-                            "url": url,
-                            "color": site['color']
-                        })
+            print(f"-> {site['name']}: {found_count}개 수집 성공")
         except Exception as e:
             print(f"{site['name']} 에러: {e}")
             
     return all_articles
 
-# 메일 생성 로직
+# 메일 본문 구성
 articles = fetch_articles()
 
 if articles:
+    now_str = datetime.now().strftime('%m/%d %H:%M')
     html_content = f"""
     <html>
     <head>
         <style>
-            body {{ font-family: 'Malgun Gothic', sans-serif; padding: 20px; line-height: 1.6; }}
-            .container {{ max-width: 700px; margin: auto; }}
-            .site-group {{ margin-bottom: 30px; }}
-            .site-tag {{ color: white; padding: 3px 10px; border-radius: 4px; font-weight: bold; font-size: 12px; margin-bottom: 10px; display: inline-block; }}
-            .news-item {{ margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px; }}
-            .news-link {{ color: #1a0dab; text-decoration: none; font-size: 16px; }}
+            body {{ font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 700px; margin: auto; padding: 20px; border: 1px solid #eee; border-radius: 12px; }}
+            .header {{ border-bottom: 3px solid #333; padding-bottom: 10px; margin-bottom: 25px; }}
+            .site-group {{ margin-bottom: 35px; }}
+            .site-tag {{ font-size: 13px; font-weight: bold; color: white; padding: 4px 12px; border-radius: 6px; display: inline-block; margin-bottom: 12px; }}
+            .news-item {{ margin-bottom: 12px; padding-left: 5px; }}
+            .news-link {{ font-size: 16px; color: #1a0dab; text-decoration: none; font-weight: 500; }}
+            .news-link:hover {{ text-decoration: underline; color: #d93025; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h2 style="border-bottom: 3px solid #333; padding-bottom: 10px;">📅 중국 게임 뉴스 (3/3 ~ 3/4 08:00)</h2>
+            <div class="header">
+                <h2 style="margin:0;">📅 중국 게임 뉴스 통합 브리핑 (3/3~3/4)</h2>
+                <p style="margin:5px 0 0; color:#666;">업데이트 시점: {now_str}</p>
+            </div>
     """
 
     for site_name in ["Gamelook", "游戏陀螺", "17173"]:
@@ -130,7 +127,7 @@ if articles:
     html_content += "</div></body></html>"
 
     msg = EmailMessage()
-    msg['Subject'] = f"[News] 03/04 중국 게임 시장 주요 기사 리스트"
+    msg['Subject'] = f"[News] {datetime.now().strftime('%m/%d')} 중국 게임 시장 기사 리스트"
     msg['From'] = EMAIL_USER
     msg['To'] = RECEIVER
     msg.add_alternative(html_content, subtype='html')
@@ -138,6 +135,6 @@ if articles:
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
         smtp.login(EMAIL_USER, EMAIL_PASS)
         smtp.send_message(msg)
-    print("발송 완료")
+    print("발송 완료!")
 else:
-    print("해당 기간의 기사가 없습니다.")
+    print("기사를 찾지 못했습니다.")
