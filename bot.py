@@ -25,73 +25,71 @@ def get_articles():
     res.encoding = 'utf-8'
     soup = BeautifulSoup(res.text, 'html.parser')
     
-    # 어제 날짜 설정 (확인하신 2026-03-02 형식)
-    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+    # 실행 시점 기준 '어제' 날짜 계산 (예: 오늘이 3일이면 2일 기사를 찾음)
+    yesterday_full = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d') # 2026-03-02
+    yesterday_short = (datetime.now() - timedelta(days=1)).strftime('%m-%d')    # 03-02
+    
     articles = []
 
-    # Gamelook의 기사 아이템들을 모두 찾습니다.
-    # 보통 div 태그 내의 post-item이나 li 태그 내에 기사가 위치합니다.
-    items = soup.select('div.post-item, div.item-list, article')
-    
+    # 기사 목록을 담고 있는 모든 요소를 찾습니다.
+    # Gamelook의 기사 리스트 구조를 더 폭넓게 검색합니다.
+    items = soup.find_all(['div', 'li', 'article'], class_=['post-item', 'item-list', 'post'])
+
     for item in items:
-        # 1. 날짜 텍스트 추출
-        date_tag = item.select_one('.post-date, .date, .time')
-        # 2. 제목과 링크 추출
-        link_tag = item.select_one('h2 a, h3 a, .post-title a')
+        # 날짜 정보가 들어있는 태그 찾기
+        date_tag = item.find(True, class_=['post-date', 'date', 'time', 'entry-date'])
+        link_tag = item.find('a', href=True)
         
         if date_tag and link_tag:
             date_text = date_tag.get_text(strip=True)
-            # 날짜가 어제 날짜를 포함하는지 검사
-            if yesterday in date_text:
-                articles.append({
-                    'title': link_tag.get_text(strip=True),
-                    'url': link_tag['href']
-                })
+            # 어제 날짜(Full 혹은 Short 형식)가 포함되어 있는지 확인
+            if (yesterday_full in date_text) or (yesterday_short in date_text) or ("1天前" in date_text):
+                title = link_tag.get_text(strip=True)
+                if title and len(title) > 5: # 너무 짧은 텍스트 제외
+                    articles.append({
+                        'title': title,
+                        'url': link_tag['href']
+                    })
     
-    # 중복 제거 (간혹 같은 기사가 두 번 잡히는 경우 대비)
-    seen = set()
-    unique_articles = []
-    for a in articles:
-        if a['url'] not in seen:
-            unique_articles.append(a)
-            seen.add(a['url'])
-            
-    return unique_articles
+    # 중복 기사 제거
+    unique_articles = {a['url']: a for a in articles}.values()
+    return list(unique_articles)
 
 def summarize(art):
     try:
-        # 본문 페이지 접속
         res = requests.get(art['url'], timeout=10)
         res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 기사 본문 영역만 추출 (entry-content 클래스 등)
-        content_area = soup.select_one('.entry-content, .post-content, #content')
-        content = content_area.get_text(strip=True)[:2000] if content_area else soup.get_text(strip=True)[:2000]
+        # 본문 텍스트만 추출
+        content = ""
+        entry = soup.select_one('.entry-content, .post-content, article')
+        if entry:
+            content = entry.get_text(strip=True)[:2500]
+        else:
+            content = soup.get_text(strip=True)[:2500]
         
-        prompt = f"다음은 중국 게임 기사 '{art['title']}'의 내용이야. 이 내용을 한국어로 번역하고 핵심을 3줄로 요약해줘.\n\n내용:\n{content}"
+        prompt = f"중국 게임 기사를 한국어로 요약해줘. 핵심 내용 3줄 요약이 포함되어야 해.\n제목: {art['title']}\n내용: {content}"
         response = model.generate_content(prompt)
         return response.text
-    except Exception as e:
-        return f"요약 중 오류 발생: {str(e)}"
+    except:
+        return "본문 요약에 실패했습니다. 링크를 확인해 주세요."
 
-# 실행
+# 실행부
 news_list = get_articles()
 
 if news_list:
-    print(f"총 {len(news_list)}개의 기사를 찾았습니다.")
-    full_report = f"📅 Gamelook 뉴스 보고서 ({datetime.now().strftime('%Y-%m-%d')})\n"
-    full_report += f"대상 날짜: {(datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')}\n\n"
+    print(f"총 {len(news_list)}개의 어제자 기사를 발견했습니다.")
+    report = f"📅 Gamelook 뉴스 브리핑 (발송일: {datetime.now().strftime('%Y-%m-%d')})\n\n"
     
-    for idx, art in enumerate(news_list, 1):
-        print(f"요약 중 ({idx}/{len(news_list)}): {art['title']}")
+    for i, art in enumerate(news_list, 1):
+        print(f"요약 중... ({i}/{len(news_list)})")
         summary = summarize(art)
-        full_report += f"[{idx}] {art['title']}\n🔗 원문: {art['url']}\n{summary}\n\n" + "="*50 + "\n\n"
+        report += f"[{i}] {art['title']}\n🔗 원문: {art['url']}\n{summary}\n\n" + "-"*30 + "\n\n"
     
-    # 메일 전송
     msg = EmailMessage()
-    msg.set_content(full_report)
-    msg['Subject'] = f"[Gamelook] {datetime.now().strftime('%m/%d')} 주요 뉴스 요약"
+    msg.set_content(report)
+    msg['Subject'] = f"[Gamelook] {datetime.now().strftime('%m/%d')} 주요 뉴스 (전날 전체 기사)"
     msg['From'] = EMAIL_USER
     msg['To'] = RECEIVER
     
@@ -100,4 +98,5 @@ if news_list:
         smtp.send_message(msg)
     print("메일 발송 완료!")
 else:
-    print(f"대상 날짜({(datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')})에 해당하는 기사가 없습니다.")
+    # 기사가 없을 경우에도 알림을 받고 싶으시면 이 부분을 메일 발송 코드로 채울 수 있습니다.
+    print("어제 날짜로 올라온 새로운 기사가 없습니다.")
