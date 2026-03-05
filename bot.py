@@ -4,8 +4,7 @@ from email.message import EmailMessage
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-import google.generativeai as genai
-import re
+import json # requests로 API를 직접 호출하기 위해 json 모듈 추가
 
 # --- 1. 설정값 불러오기 ---
 EMAIL_USER = os.environ.get("EMAIL_USER")
@@ -13,32 +12,54 @@ EMAIL_PASS = os.environ.get("EMAIL_PASSWORD")
 RECEIVER = os.environ.get("RECEIVER_EMAIL")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# --- 2. Gemini API 설정 ---
-if not GEMINI_API_KEY:
-    print("오류: GEMINI_API_KEY가 설정되지 않았습니다.")
-    exit()
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-pro')
-
-def get_gemini_summary(article_text, article_title):
-    """Gemini API를 사용하여 요약 및 번역"""
+# --- 2. Gemini API 직접 호출 함수 (라이브러리 대신 requests 사용) ---
+def get_gemini_summary_direct(article_text, article_title):
+    """requests를 사용하여 Gemini API를 직접 호출하고 요약/번역"""
     if not article_text or len(article_text) < 50:
         return "요약 실패: 기사 본문을 가져올 수 없었습니다.", "번역 실패: 원문 없음"
+    
+    # Gemini API의 직접 호출 URL
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    
     prompt = f'Translate the title of the following Chinese article into Korean and summarize the content in 3 bullet points in Korean.\n\nTitle: "{article_title}"\nContent: "{article_text[:3500]}"\n\nFormat your response EXACTLY as follows:\n[Korean Title]: <Your Korean translation>\n[Summary]:\n- <Point 1>\n- <Point 2>\n- <Point 3>'
+    
+    headers = {'Content-Type': 'application/json'}
+    data = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
+    }
+
     try:
-        response = model.generate_content(prompt, request_options={'timeout': 120})
-        title_match = re.search(r"\[Korean Title\]: (.*)", response.text)
-        summary_match = re.search(r"\[Summary\]:([\s\S]*)", response.text)
+        # API에 POST 요청 전송
+        response = requests.post(api_url, headers=headers, data=json.dumps(data), timeout=120)
+        response.raise_for_status() # 200 OK가 아니면 에러 발생
+        
+        # 응답 json에서 텍스트 추출
+        result_json = response.json()
+        result_text = result_json['candidates'][0]['content']['parts'][0]['text']
+
+        # 정규식으로 제목과 요약 분리
+        title_match = re.search(r"\[Korean Title\]: (.*)", result_text)
+        summary_match = re.search(r"\[Summary\]:([\s\S]*)", result_text)
+        
         korean_title = title_match.group(1).strip() if title_match else "번역 실패 (응답 형식 오류)"
         summary = summary_match.group(1).strip() if summary_match else "요약 실패 (응답 형식 오류)"
+        
         return summary, korean_title
-    except Exception as e:
-        if "429" in str(e): return "요약 실패 (API 사용량 초과)", "번역 실패 (API 사용량 초과)"
-        print(f"!!! Gemini API 오류: {e}")
-        return "요약 실패 (API 호출 오류)", "번역 실패 (API 호출 오류)"
 
+    except requests.exceptions.RequestException as e:
+        print(f"!!! Gemini API 네트워크 요청 오류: {e}")
+        # 429 에러(사용량 초과)를 확인
+        if e.response and e.response.status_code == 429:
+            return "요약 실패 (API 사용량 초과)", "번역 실패 (API 사용량 초과)"
+        return "요약 실패 (API 네트워크 오류)", "번역 실패 (API 네트워크 오류)"
+    except (KeyError, IndexError) as e:
+        print(f"!!! Gemini API 응답 JSON 구조 오류: {e}")
+        return "요약 실패 (API 응답 형식 오류)", "번역 실패 (API 응답 형식 오류)"
+
+# (이하 코드는 이전과 거의 동일)
 def fetch_article_content(url, site_name):
-    """사이트별 정확한 선택자를 사용하여 본문 텍스트 추출"""
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         res = requests.get(url, headers=headers, timeout=20)
@@ -61,7 +82,6 @@ def fetch_article_content(url, site_name):
         return ""
 
 def is_recent_article(context_text):
-    """최신 기사인지 판별"""
     now = datetime.now()
     patterns = [now.strftime('%m-%d'), (now - timedelta(days=1)).strftime('%m-%d'), "刚刚", "小时前", "今天", "昨天"]
     return any(p in context_text for p in patterns)
@@ -104,17 +124,18 @@ final_articles = []
 for article in initial_articles:
     print(f"-> 처리 중: {article['title'][:30]}...")
     content = fetch_article_content(article['url'], article['site'])
-    summary, korean_title = get_gemini_summary(content, article['title'])
+    # 새로운 직접 호출 함수를 사용
+    summary, korean_title = get_gemini_summary_direct(content, article['title'])
     
     article['summary'] = summary
     article['korean_title'] = korean_title
     final_articles.append(article)
-    # Syntax Error가 발생했던 부분입니다. 닫는 따옴표를 추가했습니다.
     print(f"   '{korean_title}' 처리 완료.")
 
 # --- 4. 이메일 발송 ---
 if final_articles:
     now_str = datetime.now().strftime('%m/%d')
+    # (이하 메일 본문 구성 및 발송 코드는 수정 없음)
     html_content = f"""<html><head><style>body {{ font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; }} .container {{ max-width: 800px; margin: auto; padding: 20px; }} .header {{ border-bottom: 3px solid #333; padding-bottom: 10px; margin-bottom: 25px; }} .site-group {{ margin-bottom: 35px; }} .site-tag {{ font-size: 14px; font-weight: bold; color: white; padding: 5px 14px; border-radius: 6px; display: inline-block; margin-bottom: 15px; }} .news-item {{ margin-bottom: 25px; padding-left: 5px; border-bottom: 1px solid #eee; padding-bottom: 15px; }} .news-link-original {{ font-size: 18px; color: #1a0dab; text-decoration: none; font-weight: bold; }} .news-link-original:hover {{ text-decoration: underline; }} .news-title-korean {{ font-size: 14px; color: #5f6368; margin-top: 5px; font-weight: 500;}} .summary {{ margin-top: 12px; font-size: 14px; color: #3c4043; background-color:#f8f9fa; border-left: 4px solid #d6e2ff; padding: 10px 15px; white-space: pre-wrap; line-height: 1.7;}}</style></head><body><div class="container"><div class="header"><h2 style="margin:0;">📅 중국 게임 뉴스 통합 리포트 ({now_str})</h2><p style="margin:5px 0 0; color:#666;">수집 기준: Gamelook / 游戏陀螺 (Gemini 요약 포함)</p></div>"""
     for site_name in ["Gamelook", "游戏陀螺"]:
         site_list = [a for a in final_articles if a['site'] == site_name]
