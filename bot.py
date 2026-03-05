@@ -45,8 +45,6 @@ def fetch_article_content(url, site_name):
         res.encoding = res.apparent_encoding
         soup = BeautifulSoup(res.text, 'html.parser')
         content_area = None
-
-        # --- 사이트별 정확한 '주소'를 최종 반영! ---
         if site_name == "Gamelook":
             content_area = soup.find('div', class_='entry-content clearfix')
         elif site_name == "游戏陀螺":
@@ -56,7 +54,6 @@ def fetch_article_content(url, site_name):
             print(f"    - ✅ 본문 수집 성공! (URL: {url})")
             return content_area.get_text(strip=True, separator='\n')
         else:
-            # 이 메시지가 보인다면, 사이트 구조가 또 변경된 것입니다.
             print(f"    - ❌ '{site_name}' 본문 영역을 찾지 못함. URL: {url}")
             return ""
     except Exception as e:
@@ -92,4 +89,25 @@ for site in sites:
                 url = link_tag['href']
                 
                 if not url.startswith('http'):
-                    base_url = "https://www.youxituoluo.com" i
+                    # Syntax Error가 발생했던 부분입니다. 깔끔한 문자열로 수정했습니다.
+                    base_url = "https://www.youxituoluo.com" if site['name'] == "游戏陀螺" else site['url']
+                    url = requests.compat.urljoin(base_url, url)
+                
+                if not any(x['url'] == url for x in initial_articles):
+                    initial_articles.append({"site": site['name'], "title": title, "url": url, "color": site['color']})
+                    found_count += 1
+        print(f"   {found_count}개의 최신 기사 링크를 찾았습니다.")
+    except Exception as e:
+        print(f"'{site['name']}' 사이트 스캔 중 오류: {e}")
+
+print(f"\n--- 2단계: 총 {len(initial_articles)}개 기사의 본문을 수집하고 요약합니다. ---")
+final_articles = []
+for article in initial_articles:
+    print(f"-> 처리 중: {article['title'][:30]}...")
+    content = fetch_article_content(article['url'], article['site'])
+    summary, korean_title = get_gemini_summary(content, article['title'])
+    
+    article['summary'] = summary
+    article['korean_title'] = korean_title
+    final_articles.append(article)
+    print(f"   '{korean_title}' 처리 완료
