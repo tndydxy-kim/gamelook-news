@@ -89,7 +89,6 @@ for site in sites:
                 url = link_tag['href']
                 
                 if not url.startswith('http'):
-                    # Syntax Error가 발생했던 부분입니다. 깔끔한 문자열로 수정했습니다.
                     base_url = "https://www.youxituoluo.com" if site['name'] == "游戏陀螺" else site['url']
                     url = requests.compat.urljoin(base_url, url)
                 
@@ -110,4 +109,32 @@ for article in initial_articles:
     article['summary'] = summary
     article['korean_title'] = korean_title
     final_articles.append(article)
-    print(f"   '{korean_title}' 처리 완료
+    # Syntax Error가 발생했던 부분입니다. 닫는 따옴표를 추가했습니다.
+    print(f"   '{korean_title}' 처리 완료.")
+
+# --- 4. 이메일 발송 ---
+if final_articles:
+    now_str = datetime.now().strftime('%m/%d')
+    html_content = f"""<html><head><style>body {{ font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; }} .container {{ max-width: 800px; margin: auto; padding: 20px; }} .header {{ border-bottom: 3px solid #333; padding-bottom: 10px; margin-bottom: 25px; }} .site-group {{ margin-bottom: 35px; }} .site-tag {{ font-size: 14px; font-weight: bold; color: white; padding: 5px 14px; border-radius: 6px; display: inline-block; margin-bottom: 15px; }} .news-item {{ margin-bottom: 25px; padding-left: 5px; border-bottom: 1px solid #eee; padding-bottom: 15px; }} .news-link-original {{ font-size: 18px; color: #1a0dab; text-decoration: none; font-weight: bold; }} .news-link-original:hover {{ text-decoration: underline; }} .news-title-korean {{ font-size: 14px; color: #5f6368; margin-top: 5px; font-weight: 500;}} .summary {{ margin-top: 12px; font-size: 14px; color: #3c4043; background-color:#f8f9fa; border-left: 4px solid #d6e2ff; padding: 10px 15px; white-space: pre-wrap; line-height: 1.7;}}</style></head><body><div class="container"><div class="header"><h2 style="margin:0;">📅 중국 게임 뉴스 통합 리포트 ({now_str})</h2><p style="margin:5px 0 0; color:#666;">수집 기준: Gamelook / 游戏陀螺 (Gemini 요약 포함)</p></div>"""
+    for site_name in ["Gamelook", "游戏陀螺"]:
+        site_list = [a for a in final_articles if a['site'] == site_name]
+        if site_list:
+            html_content += f"""<div class="site-group"><span class="site-tag" style="background-color: {site_list[0]['color']};">{site_name}</span>"""
+            for art in site_list:
+                html_content += f"""<div class="news-item"><a href="{art['url']}" class="news-link-original" target="_blank">{art['title']}</a><div class="news-title-korean">{art['korean_title']}</div><div class="summary">{art['summary']}</div></div>"""
+            html_content += "</div>"
+    html_content += "</div></body></html>"
+    msg = EmailMessage()
+    msg['Subject'] = f"[News] {now_str} 중국 게임 시장 요약 리포트"
+    msg['From'] = EMAIL_USER
+    msg['To'] = RECEIVER
+    msg.add_alternative(html_content, subtype='html')
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(EMAIL_USER, EMAIL_PASS)
+            smtp.send_message(msg)
+        print(f"\n발송 완료! (총 {len(final_articles)}개 기사)")
+    except Exception as e:
+        print(f"\n이메일 발송 에러: {e}")
+else:
+    print("\n수집된 기사가 없습니다.")
